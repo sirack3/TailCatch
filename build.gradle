@@ -1,0 +1,41 @@
+plugins {
+    id 'java'
+}
+
+group = 'com.koma.tailcatch'
+version = '1.18.1'
+
+repositories {
+    mavenCentral()
+    maven {
+        name = "papermc-repo"
+        url = "https://repo.papermc.io/repository/maven-public/"
+    }
+    maven {
+        name = "purpur"
+        url = "https://repo.purpurmc.org/snapshots"
+    }
+    maven {
+        name = "dmulloy2-repo"
+        url = "https://repo.dmulloy2.net/repository/public/"
+    }
+}
+
+dependencies {
+    compileOnly "io.papermc.paper:paper-api:26.2.build.60-beta"
+    compileOnly "com.comphenix.protocol:ProtocolLib:5.3.0"
+}
+
+def targetJavaVersion = 26
+java {
+    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
+    sourceCompatibility = javaVersion
+    targetCompatibility = javaVersion
+    if (JavaVersion.current() < javaVersion) {
+        toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}

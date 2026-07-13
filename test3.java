@@ -1,0 +1,1 @@
+import org.bukkit.entity.Player; import org.bukkit.profile.PlayerProfile; public class test3 { public void test(Player p) { PlayerProfile prof = p.getPlayerProfile(); prof.setName(" 시락\); p.setPlayerProfile(prof); } }
