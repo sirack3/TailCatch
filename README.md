@@ -1,5 +1,6 @@
 # 주의!!!
 - ProtocolLib 필수입니다 [다운로드](https://github.com/dmulloy2/ProtocolLib/releases)
+- 마인크래프트 26.2에서 작동합니다
 
 # TailCatch / 마인크래프트 꼬리잡기
 
