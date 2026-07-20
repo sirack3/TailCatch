@@ -1,5 +1,5 @@
 name: TailCatch
-version: '1.18.1'
+version: '2.2.2'
 main: com.koma.tailcatch.TailCatchPlugin
 api-version: '1.20'
 depend: [ProtocolLib]

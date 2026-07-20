@@ -21,8 +21,13 @@ public class TailCatchPlugin extends JavaPlugin {
         getCommand("닉네임").setTabCompleter(nicknameHandler);
         
         getServer().getPluginManager().registerEvents(new GameListener(gameManager), this);
+        getServer().getPluginManager().registerEvents(new com.koma.tailcatch.ability.AbilityListener(this, gameManager.getAbilityManager(), gameManager), this);
         
         getLogger().info("TailCatch 꼬리잡기 플러그인이 활성화 되었습니다!");
+    }
+
+    public GameManager getGameManager() {
+        return gameManager;
     }
 
     @Override

@@ -71,6 +71,10 @@ public class GameListener implements Listener {
                     if (source instanceof Player) {
                         attacker = (Player) source;
                     }
+                } else if (damager instanceof org.bukkit.entity.Tameable tameable) {
+                    if (tameable.isTamed() && tameable.getOwner() instanceof Player owner) {
+                        attacker = owner;
+                    }
                 }
 
                 // 피해자가 정지 상태인데, 플레이어가 아닌 엔티티(몹 등)의 공격일 경우 무조건 무효화
@@ -91,6 +95,22 @@ public class GameListener implements Listener {
                             attacker.sendMessage(org.bukkit.ChatColor.RED + "주인님을 공격할 수 없습니다!");
                         }
                         return;
+                    }
+
+                    // 1.5 기절한(정지된) 플레이어에 대한 공격 제한
+                    if (gameManager.isFrozen(victim)) {
+                        boolean isHunter = false;
+                        if (attackerTeam.getTargetTeam() != null && attackerTeam.getTargetTeam().equals(victimTeam)) {
+                            isHunter = true;
+                        }
+                        
+                        if (!isHunter) {
+                            event.setCancelled(true);
+                            if (damager instanceof Player) {
+                                attacker.sendMessage(org.bukkit.ChatColor.RED + "기절한 타겟은 사냥꾼 팀만 공격할 수 있습니다!");
+                            }
+                            return;
+                        }
                     }
 
                     // 2. 타겟 관계 확인 (노예는 예외)
@@ -153,23 +173,16 @@ public class GameListener implements Listener {
                     Player killer = (Player) ((EntityDamageByEntityEvent) event).getDamager();
                     gameManager.handleCatch(killer, victim);
                 } else {
-                    Team team = gameManager.getTeamOf(victim);
-                    if (team != null && team.getSlaves().contains(victim.getUniqueId())) {
-                        // 노예가 타겟 외의 원인으로 죽을 경우 (자연사)
-                        // 이벤트를 취소하지 않고 실제로 죽게 둠 (리턴)
-                        return;
-                    } else {
-                        // 주인이 죽을 경우 얼어붙게 함
-                        event.setCancelled(true);
-                        double maxHealth = 20.0;
-                        if (victim.getAttribute(Attribute.MAX_HEALTH) != null) {
-                            maxHealth = victim.getAttribute(Attribute.MAX_HEALTH).getValue();
-                        }
-                        victim.setHealth(maxHealth);
-                        victim.setFoodLevel(20);
-                        victim.setFireTicks(0);
-                        gameManager.freezePlayer(victim);
+                    // 주인이든 노예든 타겟 외의 원인으로 죽을 경우 (자연사) 얼어붙게 함
+                    event.setCancelled(true);
+                    double maxHealth = 20.0;
+                    if (victim.getAttribute(Attribute.MAX_HEALTH) != null) {
+                        maxHealth = victim.getAttribute(Attribute.MAX_HEALTH).getValue();
                     }
+                    victim.setHealth(maxHealth);
+                    victim.setFoodLevel(20);
+                    victim.setFireTicks(0);
+                    gameManager.freezePlayer(victim);
                 }
             }
         }
@@ -186,11 +199,28 @@ public class GameListener implements Listener {
             return;
         }
 
-        // 다이아몬드 우클릭 → 타겟 추적
-        if ((event.getAction() == org.bukkit.event.block.Action.RIGHT_CLICK_AIR ||
-             event.getAction() == org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK) &&
-            player.getInventory().getItemInMainHand().getType() == org.bukkit.Material.DIAMOND) {
+        boolean isRightClick = event.getAction() == org.bukkit.event.block.Action.RIGHT_CLICK_AIR
+                || event.getAction() == org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK;
+
+        if (!isRightClick) return;
+
+        org.bukkit.Material hand = player.getInventory().getItemInMainHand().getType();
+
+        // 노예는 다이아몬드(추적기) 사용 불가
+        Team slaveTeamCheck = gameManager.getTeamOf(player);
+        if (hand == org.bukkit.Material.DIAMOND) {
+            if (slaveTeamCheck != null && slaveTeamCheck.getSlaves().contains(player.getUniqueId())) {
+                event.setCancelled(true);
+                player.sendMessage(org.bukkit.ChatColor.RED + "노예는 추적기를 사용할 수 없습니다!");
+                return;
+            }
             gameManager.useTracker(player);
+        }
+
+        // 에메랄드 우클릭 → 능력 액티브 발동
+        if (hand == org.bukkit.Material.EMERALD) {
+            event.setCancelled(true);
+            gameManager.getAbilityManager().onEmeraldUse(player);
         }
     }
 
@@ -206,6 +236,24 @@ public class GameListener implements Listener {
     public void onPlayerQuit(org.bukkit.event.player.PlayerQuitEvent event) {
         if (gameManager.isFrozen(event.getPlayer())) {
             gameManager.unfreezePlayer(event.getPlayer());
+        }
+        if (gameManager.isGameRunning()) {
+            gameManager.startDisconnectTimer(event.getPlayer());
+        }
+    }
+    
+    @EventHandler
+    public void onPlayerJoin(org.bukkit.event.player.PlayerJoinEvent event) {
+        if (gameManager.isGameRunning()) {
+            gameManager.cancelDisconnectTimer(event.getPlayer());
+            // 이름 복원은 약간의 딜레이를 주어 NameTagManager의 TextDisplay 복원 후 처리
+            org.bukkit.Bukkit.getScheduler().runTaskLater(
+                gameManager.getPlugin(), () -> {
+                    if (event.getPlayer().isOnline()) {
+                        gameManager.restorePlayerNames(event.getPlayer());
+                    }
+                }, 10L
+            );
         }
     }
 
@@ -228,26 +276,19 @@ public class GameListener implements Listener {
                     event.setCancelled(true);
                     player.sendMessage(org.bukkit.ChatColor.RED + "노예는 갑옷을 변경할 수 없습니다!");
                 }
+                // 노예가 인벤에서 다이아몬드를 다른 칸으로 옮기는 행위도 제한
+                else if (type == org.bukkit.Material.DIAMOND) {
+                    event.setCancelled(true);
+                    player.sendMessage(org.bukkit.ChatColor.RED + "노예는 추적기를 사용할 수 없습니다!");
+                }
+            }
+            // 일반 클릭으로 다이아몬드 집는 행위 제한
+            else if (event.getCurrentItem() != null && event.getCurrentItem().getType() == org.bukkit.Material.DIAMOND) {
+                event.setCancelled(true);
+                player.sendMessage(org.bukkit.ChatColor.RED + "노예는 추적기를 사용할 수 없습니다!");
             }
         }
     }
 
-    @EventHandler
-    public void onPlayerRespawn(org.bukkit.event.player.PlayerRespawnEvent event) {
-        if (!gameManager.isGameRunning()) return;
-        
-        Player player = event.getPlayer();
-        Team team = gameManager.getTeamOf(player);
-        if (team != null && team.getSlaves().contains(player.getUniqueId())) {
-            org.bukkit.entity.Player master = org.bukkit.Bukkit.getPlayer(team.getMasterId());
-            if (master != null && master.isOnline()) {
-                event.setRespawnLocation(master.getLocation());
-                
-                org.bukkit.Bukkit.getScheduler().runTaskLater(TailCatchPlugin.getPlugin(TailCatchPlugin.class), () -> {
-                    player.playEffect(org.bukkit.EntityEffect.TOTEM_RESURRECT);
-                    player.sendMessage(org.bukkit.ChatColor.GREEN + "주인님의 곁으로 부활했습니다!");
-                }, 5L);
-            }
-        }
-    }
+    // onPlayerRespawn 삭제 (더 이상 실제 사망하지 않고 정지됨)
 }

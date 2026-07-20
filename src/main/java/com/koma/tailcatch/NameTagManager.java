@@ -45,24 +45,31 @@ public class NameTagManager implements Listener {
         team.setNameTagVisibility(NameTagVisibility.NEVER); // 원래 영어 이름 숨김
         team.setPrefix("");
         team.setSuffix("");
+        team.setCanSeeFriendlyInvisibles(true); // 투명화된 플레이어 서로 반투명하게 보이도록 설정
         return team;
     }
 
     @SuppressWarnings("deprecation")
-    public static void setCustomName(Player player, String displayName) {
+    public static void setCustomName(Player player, String displayName, boolean updateTabAndChat) {
         customNames.put(player.getUniqueId(), displayName);
 
         // 1. 바닐라 네임태그 숨김
         Team hideTeam = ensureHideTeam();
         hideTeam.addEntry(player.getName());
 
-        // 2. 탭 리스트 이름 설정
-        player.setPlayerListName(displayName);
-        player.setDisplayName(displayName);
+        // 2. 탭 리스트 및 채팅 이름 설정 (선택적)
+        if (updateTabAndChat) {
+            player.setPlayerListName(displayName);
+            player.setDisplayName(displayName);
+        }
 
         // 3. TextDisplay 승객 생성
         removeTextDisplay(player.getUniqueId());
         spawnTextDisplay(player, displayName);
+    }
+
+    public static void setCustomName(Player player, String displayName) {
+        setCustomName(player, displayName, true);
     }
 
     @SuppressWarnings("deprecation")
@@ -113,6 +120,10 @@ public class NameTagManager implements Listener {
 
     public static String getCustomName(UUID uuid) {
         return customNames.get(uuid);
+    }
+
+    public static TextDisplay getTextDisplay(UUID uuid) {
+        return nameTagDisplays.get(uuid);
     }
 
     public static String getDisplayName(Player player) {
@@ -176,6 +187,34 @@ public class NameTagManager implements Listener {
         Team hideTeam = board.getTeam(HIDE_TEAM);
         if (hideTeam != null) {
             hideTeam.unregister();
+        }
+    }
+
+    // 플레이어 퇴장 시 TextDisplay 제거 (공중에 남는 것 방지)
+    @EventHandler
+    public void onPlayerQuit(org.bukkit.event.player.PlayerQuitEvent event) {
+        Player player = event.getPlayer();
+        removeTextDisplay(player.getUniqueId());
+    }
+
+    // 플레이어 재접속 시 커스텀 이름이 저장되어 있으면 TextDisplay 재생성
+    @SuppressWarnings("deprecation")
+    @EventHandler
+    public void onPlayerJoin(org.bukkit.event.player.PlayerJoinEvent event) {
+        Player player = event.getPlayer();
+        String name = customNames.get(player.getUniqueId());
+        if (name != null) {
+            Bukkit.getScheduler().runTaskLater(pluginInstance, () -> {
+                if (player.isOnline()) {
+                    // 바닐라 네임태그 다시 숨김
+                    Team hideTeam = ensureHideTeam();
+                    hideTeam.addEntry(player.getName());
+                    
+                    // TextDisplay 재생성
+                    removeTextDisplay(player.getUniqueId());
+                    spawnTextDisplay(player, name);
+                }
+            }, 5L); // 5틱 후 (플레이어 로딩 완료 대기)
         }
     }
 }

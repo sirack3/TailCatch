@@ -1,5 +1,7 @@
 package com.koma.tailcatch;
 
+import com.koma.tailcatch.ability.AbilityManager;
+import com.koma.tailcatch.ability.impl.SirakAbility;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
@@ -37,9 +39,32 @@ public class GameManager {
     // 원래 닉네임 백업용 맵
     private final Map<UUID, String> originalDisplayNames = new HashMap<>();
     private final Map<UUID, String> originalListNames = new HashMap<>();
+    
+    // 퇴장 타이머
+    private final Map<UUID, org.bukkit.scheduler.BukkitTask> disconnectTimers = new HashMap<>();
+
+    // 능력 시스템
+    private final AbilityManager abilityManager;
 
     public GameManager(JavaPlugin plugin) {
         this.plugin = plugin;
+        this.abilityManager = new AbilityManager(plugin);
+        this.abilityManager.register(new com.koma.tailcatch.ability.impl.SirakAbility(plugin));
+        this.abilityManager.register(new com.koma.tailcatch.ability.impl.MongdoAbility(plugin));
+        this.abilityManager.register(new com.koma.tailcatch.ability.impl.YudaAbility(plugin));
+        this.abilityManager.register(new com.koma.tailcatch.ability.impl.SeoulAbility(plugin));
+        this.abilityManager.register(new com.koma.tailcatch.ability.impl.TenkaAbility(plugin));
+        this.abilityManager.register(new com.koma.tailcatch.ability.impl.HwawolAbility(plugin));
+        this.abilityManager.register(new com.koma.tailcatch.ability.impl.KoiAbility(plugin));
+        this.abilityManager.register(new com.koma.tailcatch.ability.impl.CheongwolAbility(plugin));
+    }
+
+    public AbilityManager getAbilityManager() {
+        return abilityManager;
+    }
+
+    public JavaPlugin getPlugin() {
+        return plugin;
     }
 
     public boolean isGameRunning() {
@@ -91,6 +116,16 @@ public class GameManager {
         if (stand != null) {
             stand.remove();
         }
+
+        Team team = getTeamOf(p);
+        if (team != null && team.getSlaves().contains(p.getUniqueId())) {
+            Player master = Bukkit.getPlayer(team.getMasterId());
+            if (master != null && master.isOnline()) {
+                p.teleport(master.getLocation());
+                p.playEffect(org.bukkit.EntityEffect.TOTEM_RESURRECT);
+                p.sendMessage(ChatColor.GREEN + "주인님의 곁으로 부활했습니다!");
+            }
+        }
     }
 
     public void startGame() {
@@ -116,6 +151,15 @@ public class GameManager {
         for (org.bukkit.World w : Bukkit.getWorlds()) {
             w.setGameRule(org.bukkit.GameRule.ANNOUNCE_ADVANCEMENTS, false);
             w.setGameRule(org.bukkit.GameRule.SHOW_DEATH_MESSAGES, false);
+            w.setGameRule(org.bukkit.GameRule.REDUCED_DEBUG_INFO, true); // 좌표 표시 숨김
+            
+            w.setGameRule(org.bukkit.GameRule.SEND_COMMAND_FEEDBACK, false);
+            w.setGameRule(org.bukkit.GameRule.LOG_ADMIN_COMMANDS, false);
+        }
+        Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "gamerule locator_bar false");
+        for (org.bukkit.World w : Bukkit.getWorlds()) {
+            w.setGameRule(org.bukkit.GameRule.SEND_COMMAND_FEEDBACK, true);
+            w.setGameRule(org.bukkit.GameRule.LOG_ADMIN_COMMANDS, true);
         }
 
         playerTeamMap.clear();
@@ -131,8 +175,20 @@ public class GameManager {
         originalListNames.clear();
 
         for (Player p : players) {
-            originalDisplayNames.put(p.getUniqueId(), p.getDisplayName());
+            // 커스텀 닉네임(NameTagManager)이 있으면 그것을 백업, 없으면 원래 이름 백업
+            String currentCustom = NameTagManager.getCustomName(p.getUniqueId());
+            originalDisplayNames.put(p.getUniqueId(), currentCustom != null ? currentCustom : p.getName());
             originalListNames.put(p.getUniqueId(), p.getPlayerListName());
+            
+            // 인벤토리 초기화
+            p.getInventory().clear();
+            p.getInventory().setArmorContents(new org.bukkit.inventory.ItemStack[4]);
+
+            // 경험치바(로케이트바) 초기화
+            p.setLevel(0);
+            p.setExp(0f);
+            p.setFoodLevel(20);
+            p.setSaturation(20f);
             
             if (p.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH) != null) {
                 p.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).setBaseValue(20.0);
@@ -141,6 +197,11 @@ public class GameManager {
             Team t = new Team(p.getUniqueId());
             playerTeamMap.put(p.getUniqueId(), t);
             activeTeams.add(t);
+            
+            // 팀 배정 전에 순수 닉네임(팀 칭호 없는 상태)으로 능력 부여
+            String rawName = originalDisplayNames.get(p.getUniqueId());
+            String pureName = org.bukkit.ChatColor.stripColor(rawName).trim();
+            abilityManager.onGameStart(p, pureName);
         }
 
         Collections.shuffle(activeTeams);
@@ -159,11 +220,14 @@ public class GameManager {
                 String customName = originalDisplayNames.containsKey(master.getUniqueId()) ? originalDisplayNames.get(master.getUniqueId()) : master.getName();
                 ChatColor chatColor = NicknameCommand.getChatColorFromDisplayName(master.getDisplayName());
                 
-                // NameTagManager로 [A팀] 닉네임 형식으로 네임태그 완전 교체 (영어 이름 숨김)
-                String newDisplayName = ChatColor.GRAY + "[" + teamName + "] " + chatColor + customName;
-                master.setDisplayName(newDisplayName);
-                master.setPlayerListName(newDisplayName);
-                NameTagManager.setCustomName(master, newDisplayName);
+                // 탭리스트 및 채팅용 이름 (팀 숨김)
+                String pureDisplayName = chatColor + customName;
+                // 네임태그용 이름 (팀 표시)
+                String nametagName = ChatColor.GRAY + "[" + teamName + "] " + pureDisplayName;
+                
+                master.setDisplayName(pureDisplayName); // 채팅창에는 팀 이름 제외
+                master.setPlayerListName(pureDisplayName); // 탭리스트에는 팀 이름 제외
+                NameTagManager.setCustomName(master, nametagName, false); // 네임태그에만 팀 이름 포함, 탭리스트/채팅 미적용
             }
         }
 
@@ -181,7 +245,6 @@ public class GameManager {
                 border.setCenter(w.getSpawnLocation());
                 border.setSize(worldBorderSize);
             }
-            Bukkit.broadcastMessage(ChatColor.YELLOW + "월드보더가 설정되었습니다. (크기: " + worldBorderSize + ")");
         }
 
         if (testMode) {
@@ -254,6 +317,11 @@ public class GameManager {
                 );
             }
         }
+        
+        // 팀과 타겟 안내가 끝난 후 마지막에 능력 설명 출력
+        for (Player p : players) {
+            abilityManager.sendAbilityInfo(p);
+        }
 
         startDistanceTask();
         startFreezeTask();
@@ -284,14 +352,35 @@ public class GameManager {
         if (freezeTask != -1) { Bukkit.getScheduler().cancelTask(freezeTask); freezeTask = -1; }
         if (heartbeatTask != -1) { Bukkit.getScheduler().cancelTask(heartbeatTask); heartbeatTask = -1; }
         
+        for (org.bukkit.scheduler.BukkitTask task : disconnectTimers.values()) {
+            task.cancel();
+        }
+        disconnectTimers.clear();
+        
+        // 능력 제거
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            abilityManager.onGameEnd(p);
+        }
+        abilityManager.clear();
+        
         Bukkit.broadcastMessage(ChatColor.RED + "꼬리잡기 게임이 종료되었습니다.");
         
         for (org.bukkit.World w : Bukkit.getWorlds()) {
             w.setGameRule(org.bukkit.GameRule.ANNOUNCE_ADVANCEMENTS, true);
             w.setGameRule(org.bukkit.GameRule.SHOW_DEATH_MESSAGES, true);
+            w.setGameRule(org.bukkit.GameRule.REDUCED_DEBUG_INFO, false); // 좌표 표시 복구
             if (worldBorderSize > 0) {
                 w.getWorldBorder().reset();
             }
+        }
+        for (org.bukkit.World w : Bukkit.getWorlds()) {
+            w.setGameRule(org.bukkit.GameRule.SEND_COMMAND_FEEDBACK, false);
+            w.setGameRule(org.bukkit.GameRule.LOG_ADMIN_COMMANDS, false);
+        }
+        Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "gamerule locator_bar true");
+        for (org.bukkit.World w : Bukkit.getWorlds()) {
+            w.setGameRule(org.bukkit.GameRule.SEND_COMMAND_FEEDBACK, true);
+            w.setGameRule(org.bukkit.GameRule.LOG_ADMIN_COMMANDS, true);
         }
         
         for (Player p : Bukkit.getOnlinePlayers()) {
@@ -299,11 +388,16 @@ public class GameManager {
                 p.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).setBaseValue(20.0);
             }
             
-            // 원래 닉네임 복구 (NameTagManager로 숨겼던 이름도 해제)
-            NameTagManager.removeCustomName(p);
-            if (originalDisplayNames.containsKey(p.getUniqueId())) {
-                p.setDisplayName(originalDisplayNames.get(p.getUniqueId()));
+            // 원래 설정했던 닉네임으로 복구 ([A팀] 등의 접두사 제거)
+            String origName = originalDisplayNames.get(p.getUniqueId());
+            if (origName != null && !origName.equals(p.getName())) {
+                NameTagManager.setCustomName(p, origName);
+                p.setDisplayName(origName);
+            } else {
+                NameTagManager.removeCustomName(p);
+                p.setDisplayName(p.getName());
             }
+
             if (originalListNames.containsKey(p.getUniqueId())) {
                 p.setPlayerListName(originalListNames.get(p.getUniqueId()));
             }
@@ -554,10 +648,10 @@ public class GameManager {
 
                 double distance = attacker.getLocation().distance(targetPlayer.getLocation());
 
-                // 50블록 이내일 때 심장 효과 (거리에 비례한 강도)
-                if (distance <= 50) {
+                // 40블록 이내일 때 심장 효과 (거리에 비례한 강도)
+                if (distance <= 40) {
                     // 거리가 가까울수록 강도 증가 (0~1)
-                    double intensity = 1.0 - (distance / 50.0);
+                    double intensity = 1.0 - (distance / 40.0);
                     float volume = (float) (0.3 + intensity * 0.7);
                     float pitch = (float) (0.8 + intensity * 0.4);
 
@@ -603,17 +697,7 @@ public class GameManager {
                 long timeLeft = entry.getValue() - now;
                 if (timeLeft <= 0) {
                     it.remove();
-                    ArmorStand stand = freezeHolograms.remove(playerId);
-                    if (stand != null) stand.remove();
-                    
-                    if (p.getAttribute(Attribute.BLOCK_INTERACTION_RANGE) != null) {
-                        p.getAttribute(Attribute.BLOCK_INTERACTION_RANGE).setBaseValue(p.getAttribute(Attribute.BLOCK_INTERACTION_RANGE).getDefaultValue());
-                    }
-                    if (p.getAttribute(Attribute.ENTITY_INTERACTION_RANGE) != null) {
-                        p.getAttribute(Attribute.ENTITY_INTERACTION_RANGE).setBaseValue(p.getAttribute(Attribute.ENTITY_INTERACTION_RANGE).getDefaultValue());
-                    }
-                    
-                    p.spigot().sendMessage(ChatMessageType.ACTION_BAR, TextComponent.fromLegacyText(""));
+                    unfreezePlayer(p);
                     p.sendMessage(ChatColor.GREEN + "정지 상태가 해제되었습니다!");
                     p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 1.0f, 1.0f);
                 } else {
@@ -651,5 +735,114 @@ public class GameManager {
         player.getInventory().setChestplate(chest);
         player.getInventory().setLeggings(legs);
         player.getInventory().setBoots(boots);
+    }
+
+    public void startDisconnectTimer(Player player) {
+        if (!isGameRunning) return;
+        Team team = getTeamOf(player);
+        // 마스터(주인)이면서 살아있는 팀일 경우에만 타이머 작동
+        if (team != null && team.getMasterId().equals(player.getUniqueId()) && activeTeams.contains(team)) {
+            Bukkit.broadcastMessage(ChatColor.RED + "[경고] " + ChatColor.YELLOW + player.getName() + "님이 게임에서 나갔습니다! 3분 내로 접속하지 않으면 탈락됩니다!");
+            
+            org.bukkit.scheduler.BukkitTask task = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                disconnectTimers.remove(player.getUniqueId());
+                eliminateDisconnectedTeam(team);
+            }, 20L * 180); // 3분 (180초)
+            
+            disconnectTimers.put(player.getUniqueId(), task);
+        }
+    }
+
+    public void cancelDisconnectTimer(Player player) {
+        if (disconnectTimers.containsKey(player.getUniqueId())) {
+            disconnectTimers.get(player.getUniqueId()).cancel();
+            disconnectTimers.remove(player.getUniqueId());
+            Bukkit.broadcastMessage(ChatColor.GREEN + "[알림] " + ChatColor.YELLOW + player.getName() + "님이 재접속하여 탈락 위기를 넘겼습니다!");
+        }
+    }
+
+    /** 재접속한 플레이어의 탭 리스트, 채팅 이름, 네임태그를 복원 */
+    public void restorePlayerNames(Player player) {
+        Team team = getTeamOf(player);
+        if (team == null) return;
+        
+        String customName = originalDisplayNames.containsKey(player.getUniqueId()) 
+                ? originalDisplayNames.get(player.getUniqueId()) : player.getName();
+        ChatColor chatColor = NicknameCommand.getChatColorFromDisplayName(
+                customName.length() > 2 ? customName : ChatColor.WHITE + customName);
+        // originalDisplayNames에 저장된 이름에서 색상 코드 추출
+        if (originalDisplayNames.containsKey(player.getUniqueId())) {
+            String orig = originalDisplayNames.get(player.getUniqueId());
+            chatColor = NicknameCommand.getChatColorFromDisplayName(chatColor + orig);
+        }
+        
+        boolean isSlave = team.getSlaves().contains(player.getUniqueId());
+        
+        if (isSlave) {
+            String slaveName = ChatColor.GRAY + "[노예] " + chatColor + customName;
+            player.setDisplayName(slaveName);
+            player.setPlayerListName(slaveName);
+            NameTagManager.setCustomName(player, slaveName);
+        } else {
+            String pureDisplayName = chatColor + customName;
+            String nametagName = ChatColor.GRAY + "[" + team.getTeamName() + "] " + pureDisplayName;
+            
+            player.setDisplayName(pureDisplayName); // 채팅창에는 팀 이름 제외
+            player.setPlayerListName(pureDisplayName); // 탭리스트에는 팀 이름 제외
+            NameTagManager.setCustomName(player, nametagName, false); // 네임태그에만 팀 이름 포함
+        }
+    }
+
+    private void eliminateDisconnectedTeam(Team disconnectedTeam) {
+        if (!activeTeams.contains(disconnectedTeam)) return;
+
+        Bukkit.broadcastMessage(ChatColor.RED + "[탈락] " + ChatColor.YELLOW + disconnectedTeam.getTeamName() + " (주인 " + disconnectedTeam.getMasterId() + ") 팀이 시간 초과로 탈락했습니다!");
+        
+        // 이 팀을 쫓던 사냥꾼 찾기
+        Team hunterTeam = null;
+        for (Team t : activeTeams) {
+            if (t.getTargetTeam() != null && t.getTargetTeam().equals(disconnectedTeam)) {
+                hunterTeam = t;
+                break;
+            }
+        }
+        
+        Team newTarget = disconnectedTeam.getTargetTeam();
+        
+        if (hunterTeam != null) {
+            // 사냥꾼에게 노예 흡수 (옵션 A)
+            hunterTeam.addSlaves(disconnectedTeam.getSlaves());
+            for (UUID slaveId : disconnectedTeam.getSlaves()) {
+                playerTeamMap.put(slaveId, hunterTeam);
+                Player s = Bukkit.getPlayer(slaveId);
+                if (s != null) {
+                    s.sendMessage(ChatColor.YELLOW + "원래 주인이 탈락하여, 사냥꾼 팀으로 주인이 변경되었습니다!");
+                    equipSlaveArmor(s, hunterTeam.getTeamColor());
+                }
+            }
+            
+            hunterTeam.setTargetTeam(newTarget);
+            
+            Player hunterMaster = Bukkit.getPlayer(hunterTeam.getMasterId());
+            if (hunterMaster != null) {
+                hunterMaster.sendMessage(ChatColor.AQUA + "══════════════════════");
+                hunterMaster.sendMessage(ChatColor.YELLOW + "타겟이 탈락하여 다음 타겟 팀은 " + ChatColor.RED + ChatColor.BOLD + newTarget.getTeamName() + ChatColor.YELLOW + " 입니다!");
+                hunterMaster.sendMessage(ChatColor.AQUA + "══════════════════════");
+                hunterMaster.playSound(hunterMaster.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+                hunterMaster.sendTitle(ChatColor.GOLD + "타겟 변경!", "새로운 타겟: " + newTarget.getTeamName(), 10, 70, 20);
+            }
+            
+            if (newTarget.equals(hunterTeam)) {
+                if (!isTestMode) {
+                    celebrateVictory(hunterTeam);
+                    stopGame();
+                    return;
+                } else {
+                    if (hunterMaster != null) hunterMaster.sendMessage(ChatColor.YELLOW + "[테스트 모드] 모든 타겟이 제거되었습니다!");
+                }
+            }
+        }
+        
+        activeTeams.remove(disconnectedTeam);
     }
 }
