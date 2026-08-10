@@ -2,6 +2,7 @@
 - ProtocolLib 필수입니다 [다운로드](https://github.com/dmulloy2/ProtocolLib/releases)
 - Simple Voice Chat 모드 사용 추천드립니다 (서버와 클라이언트 적용 및 포트포워딩 필요) [다운로드](https://modrinth.com/plugin/simple-voice-chat/versions)
 - 마인크래프트 26.2에서 작동합니다
+- 자바 26에서만 작동합니다
 - 유튜버 코마 꼬리잡기에서 영감 받았습니다
 - 능력 8종 (시락, 청월, 화월, 서울, 텐카, 몽도, 레코이, 유다)
 - 능력 없는 버전 v1.2.0으로 따로 빼놓았습니다
